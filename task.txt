@@ -1,0 +1,5 @@
+﻿Есть работающий плагин j:\AI_Image_Enchance\krita-ai-diffusion\  j:\AI_Image_Enchance\ai_diffusion\server\
+с flux-2-klein-4B и хорошо делает outpaint через инструмент Expand. С использованием https://huggingface.co/fal/flux-2-klein-4B-outpaint-lora
+Мне нужен скрипт и bat файл, в котором будет указана директория с изображениями. Нужно сделать outpaint для всех изображений в папке, расширев для заданного соотношения сторон. Соотношение сторон можно задать в .env, по умолчанию брать с текущего экрана. Сохранить в output. Расширять только две стороны, не 4.
+У меня видеокарта 4090 24 vram.
+Также можешь глянуть неудачную реализацию f:\E\SourcePython3\OutpainterForAspectRatio\
