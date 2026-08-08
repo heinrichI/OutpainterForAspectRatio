@@ -1,0 +1,33 @@
+﻿Теперь тени черные от оригинального изображения на дорисованную часть. Причем несколько теней, от нескольких проходов. С использованием оригинальнго плагиан krita такого не было.
+Нужно изучить как там точно раюотает и повторить.
+
+Исследуй плагин krita-ai-diffusion по пути j:\AI_Image_Enchance\krita-ai-diffusion\ (и его сервер j:\AI_Image_Enchance\ai_diffusion\server\). Мне нужно понять ТОЧНЫЙ пайплайн outpainting (режим Expand), чтобы понять, можно ли скопировать его один в один в наш скрипт run_outpaint.py.
+
+Найди и процитируй (с путями и номерами строк) следующее:
+
+1. **Как строится входная канва** для outpainting: плагин заливает рамку зелёным #00FF00 или чем-то другим? Найди код, который создаёт "green fill" / "expand" канву. Ищи в workflow.py, model.py, settings.py, и в папке плагина (Krita plugin) — например в файлах типа outpaint.py, expand.py, generation.py.
+
+2. **Как строится маска inpainting** (denoise mask): точная последовательность нод (INPAINT_ExpandMask, ThresholdMask, CropMask, INPAINT_StabilizeMask и т.д.) с параметрами. Процитируй функцию, которая это строит (например apply_grow_feather, apply_grow, denoise_to_compositing_mask).
+
+3. **Как композитится результат** обратно на документ: точная последовательность — crop, composite, ETN_ApplyMaskToImage, ImageCompositeMasked. Процитируй код, где результат накладывается на оригинал/документ. Важно: композитится ли поверх зелёной заливки или поверх реального контента документа?
+
+4. **Параметры по умолчанию**: steps, CFG/guidance, LoRA strength, selection_blend, grow, feather. Найди дефолты в settings.py и model.py.
+
+5. **Делает ли плагин многопроходность** (multi-pass) для больших рамок, или всегда один проход? Найди, как плагин обрабатывает случай, когда рамка больше рекомендуемой.
+
+6. **Есть ли пост-обработка шума** (denoise, median filter) в плагине?
+
+Отчёт должен быть подробным, с точными цитатами кода и номерами строк.
+
+Исследуй сервер плагина j:\AI_Image_Enchance\ai_diffusion\server\ (папка ComfyUI и custom_nodes). Мне нужно понять, какие custom nodes используются для outpainting и как они работают, чтобы понять, можно ли воспроизвести пайплайн плагина один в один.
+
+Найди и процитируй:
+1. **comfyui-inpaint-nodes**: какие ноды есть (INPAINT_ExpandMask, INPAINT_StabilizeMask, INPAINT_ColorMatch, INPAINT_ShrinkMask и т.д.)? Как они реализованы (найди исходники в custom_nodes\comfyui-inpaint-nodes)? Особенно INPAINT_ShrinkMask — как он работает (blur_type, параметры)?
+
+2. **comfyui-tooling-nodes**: какие ноды (ETN_LoadImageCache, ETN_SaveImageCache, ETN_ApplyMaskToImage, ETN_LoadImage)? Как ETN_ApplyMaskToImage применяет маску к изображению?
+
+3. **Как сервер обрабатывает "document"** — есть ли понятие документа/слоя, на который композитится результат? Ищи в server\ (например в server\server.py, server\document.py, server\image.py) как результат outpainting возвращается в Krita.
+
+4. **Есть ли в сервере готовый эндпоинт/функция для outpainting**, который можно вызвать напрямую (не через Krita UI)? Например REST API, websocket, или функция в server.py.
+
+Отчёт подробный, с путями и номерами строк.
