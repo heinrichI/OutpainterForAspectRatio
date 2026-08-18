@@ -112,7 +112,7 @@ Notes:
    - Wait on WS for `executed` (grab `output.images[].id`) or `execution_error`/`execution_interrupted`; log progress via `progress` messages. Timeout per image (default 900 s).
    - `GET /api/etn/image/<id>` → save `output/<name>__<W>x<H>_<ratio>.png`.
    - Fixed seed per image (`SEED` in .env, default random); `--limit`, `--only` optional CLI overrides.
-6. Write `output/manifest.jsonl` per image: status, paths, geometry, seed, elapsed. `RESUME=true` skips entries already marked `ok`.
+6. Write `output/results.jsonl` per image: status, paths, geometry, seed, elapsed. `RESUME=true` skips entries already marked `ok`.
 7. Per-image error handling: catch OOM (parse `execution_error` for `OutOfMemoryError`), log, continue; optionally `POST /interrupt` on timeout.
 
 ---
@@ -169,7 +169,7 @@ pause
 
 1. Start server, run `--dry-run` on one test image → eyeball graph JSON matches section 4 node names/inputs.
 2. Process one small image (e.g. 512×512 → 16:9) with 20 steps; verify output saved, original region pixel-identical where mask=0, green gone, no seams.
-3. Batch run `testImages`; confirm manifest `ok` entries + PNGs exist on disk (old bug: manifest said ok with no file).
+3. Batch run `testImages`; confirm results `ok` entries + PNGs exist on disk (old bug: results said ok with no file).
 4. Check VRAM headroom on 4090 during a 2048-long-side job (should fit in 24 GB fp8; no `--lowvram`).
 5. Test taller-ratio case (9:16) to confirm top/bottom expansion.
 
@@ -177,7 +177,7 @@ pause
 
 ## 9. Deliverables summary
 
-- `run_outpaint.py` — single-file batch runner (geometry, server auto-start, graph builder, WS job execution, PNG retrieval, manifest, resume, dry-run).
+- `run_outpaint.py` — single-file batch runner (geometry, server auto-start, graph builder, WS job execution, PNG retrieval, results log, resume, dry-run).
 - `process_images.bat` — double-click launcher using the plugin's venv python.
 - `.env` — documented defaults (ratio from screen by default).
 - `README.md` — setup + usage in Russian, notes on quality knobs (steps/CFG/border limits).

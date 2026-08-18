@@ -654,27 +654,28 @@ def log(msg: str):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def load_manifest(out_dir: Path) -> dict:
-    """Return {image_key: {status, ...}}."""
+def load_results(out_dir: Path) -> dict:
+    """Return {image_key: {status, ...}} from results.jsonl (legacy: manifest.jsonl)."""
     result = {}
-    p = out_dir / "manifest.jsonl"
-    if not p.exists():
-        return result
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+    for name in ("manifest.jsonl", "results.jsonl"):  # legacy first, newer wins
+        p = out_dir / name
+        if not p.exists():
             continue
-        try:
-            entry = json.loads(line)
-            result[entry.get("key")] = entry
-        except json.JSONDecodeError:
-            continue
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                result[entry.get("key")] = entry
+            except json.JSONDecodeError:
+                continue
     return result
 
 
-def append_manifest(out_dir: Path, entry: dict):
+def append_results(out_dir: Path, entry: dict):
     out_dir.mkdir(parents=True, exist_ok=True)
-    with open(out_dir / "manifest.jsonl", "a", encoding="utf-8") as f:
+    with open(out_dir / "results.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
@@ -830,11 +831,11 @@ def run_outpaint_pass(client: ComfyClient, cfg: dict, name: str, source: Image.I
 
 
 def process_one(client: ComfyClient, cfg: dict, image_path: Path, src_dir: Path,
-                out_dir: Path, manifest: dict, args) -> dict:
+                out_dir: Path, results: dict, args) -> dict:
     name = image_path.name
     key = f"{name}|{cfg.get('ASPECT_RATIO', 'screen')}|{PIPE_VERSION}"
 
-    if args.resume and manifest.get(key, {}).get("status") == "ok":
+    if args.resume and results.get(key, {}).get("status") == "ok":
         log(f"SKIP (already done): {name}")
         return {"key": key, "status": "skipped", "image": name}
 
@@ -929,7 +930,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="max images to process (0=all)")
     ap.add_argument("--only", help="process only files containing this substring")
     ap.add_argument("--resume", action="store_true", help="resume (skip done)")
-    ap.add_argument("--no-resume", action="store_true", help="ignore manifest")
+    ap.add_argument("--no-resume", action="store_true", help="ignore results file")
     ap.add_argument("--dry-run", action="store_true",
                     help="dump graph JSON instead of submitting")
     ap.add_argument("--check", action="store_true",
@@ -988,7 +989,8 @@ def main():
         sys.exit(2)
 
     resume = args.resume or (not args.no_resume and env_bool(str(cfg.get("RESUME", "true"))))
-    manifest = load_manifest(out_dir) if resume else {}
+    args.resume = resume  # make env-based RESUME visible to process_one()
+    results = load_results(out_dir) if resume else {}
 
     images = collect_images(src_dir)
     if not images:
@@ -1003,8 +1005,11 @@ def main():
     stats = {"ok": 0, "error": 0, "skipped": 0}
     t0 = time.time()
     for img in images:
-        res = process_one(client, cfg, img, src_dir, out_dir, manifest, args)
-        append_manifest(out_dir, {**res, "ts": time.time()})
+        res = process_one(client, cfg, img, src_dir, out_dir, results, args)
+        # --dry-run must NOT touch the results file, otherwise its "dry-run"
+        # entries overwrite previously recorded "ok" status and break resume.
+        if not args.dry_run:
+            append_results(out_dir, {**res, "ts": time.time()})
         stats[res.get("status", "skipped")] = stats.get(res.get("status", "skipped"), 0) + 1
 
     log(f"Done in {time.time() - t0:.1f}s. "
