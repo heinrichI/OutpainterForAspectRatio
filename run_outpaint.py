@@ -98,7 +98,6 @@ REQUIRED_NODES = [
 ]
 
 DIF_MULT = 16  # diffusion multiple
-PIPE_VERSION = "v4"  # bump to force reprocessing after pipeline changes
 
 
 def parse_env(path: Path) -> dict:
@@ -654,31 +653,6 @@ def log(msg: str):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def load_results(out_dir: Path) -> dict:
-    """Return {image_key: {status, ...}} from results.jsonl (legacy: manifest.jsonl)."""
-    result = {}
-    for name in ("manifest.jsonl", "results.jsonl"):  # legacy first, newer wins
-        p = out_dir / name
-        if not p.exists():
-            continue
-        for line in p.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                result[entry.get("key")] = entry
-            except json.JSONDecodeError:
-                continue
-    return result
-
-
-def append_results(out_dir: Path, entry: dict):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with open(out_dir / "results.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-
 def collect_images(src_dir: Path) -> list[Path]:
     exts = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
     files = [p for p in src_dir.iterdir() if p.suffix.lower() in exts]
@@ -831,20 +805,16 @@ def run_outpaint_pass(client: ComfyClient, cfg: dict, name: str, source: Image.I
 
 
 def process_one(client: ComfyClient, cfg: dict, image_path: Path, src_dir: Path,
-                out_dir: Path, results: dict, args) -> dict:
+                out_dir: Path, args) -> dict:
     name = image_path.name
-    key = f"{name}|{cfg.get('ASPECT_RATIO', 'screen')}|{PIPE_VERSION}"
-
-    if args.resume and results.get(key, {}).get("status") == "ok":
-        log(f"SKIP (already done): {name}")
-        return {"key": key, "status": "skipped", "image": name}
+    stem = Path(name).stem
 
     try:
         im = Image.open(image_path)
         iw, ih = im.size
     except Exception as e:
         log(f"ERROR reading {name}: {e}")
-        return {"key": key, "status": "error", "image": name, "error": str(e)}
+        return {"status": "error", "image": name, "error": str(e)}
 
     try:
         target_w, target_h = parse_aspect_ratio(cfg)
@@ -854,14 +824,19 @@ def process_one(client: ComfyClient, cfg: dict, image_path: Path, src_dir: Path,
                                      max_long, max_pixels)
     except Exception as e:
         log(f"ERROR geometry {name}: {e}")
-        return {"key": key, "status": "error", "image": name, "error": str(e)}
+        return {"status": "error", "image": name, "error": str(e)}
 
     if final_geo is None:
         log(f"SKIP (ratio already matches): {name} ({iw}x{ih})")
         if args.resume:
-            return {"key": key, "status": "ok", "image": name,
+            return {"status": "ok", "image": name,
                     "reason": "ratio_match", "src": iw, "ih": ih}
-        return {"key": key, "status": "skipped", "image": name, "reason": "ratio_match"}
+        return {"status": "skipped", "image": name, "reason": "ratio_match"}
+
+    out_path = out_dir / f"{stem}__{final_geo['TW']}x{final_geo['TH']}.png"
+    if args.resume and out_path.exists() and out_path.stat().st_size > 0:
+        log(f"SKIP (already done): {name}")
+        return {"status": "skipped", "image": name, "output": str(out_path)}
 
     log(f"Process {name}: {iw}x{ih} -> {final_geo['TW']}x{final_geo['TH']} "
         f"(L+{final_geo['dx_left']} R+{final_geo['dx_right']} "
@@ -878,11 +853,11 @@ def process_one(client: ComfyClient, cfg: dict, image_path: Path, src_dir: Path,
                          compute_pass_resolution(final_geo, cfg))
         debug_dir = out_dir / "debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
-        dump = {"key": key, "geometry": final_geo, "graph": wf.root()}
-        (debug_dir / f"{Path(name).stem}.graph.json").write_text(
+        dump = {"geometry": final_geo, "graph": wf.root()}
+        (debug_dir / f"{stem}.graph.json").write_text(
             json.dumps(dump, indent=2), encoding="utf-8")
-        log(f"DRY-RUN: graph written to {debug_dir / (Path(name).stem + '.graph.json')}")
-        return {"key": key, "status": "dry-run", "image": name}
+        log(f"DRY-RUN: graph written to {debug_dir / (stem + '.graph.json')}")
+        return {"status": "dry-run", "image": name}
 
     try:
         seed = args.seed if args.seed is not None else (
@@ -890,22 +865,20 @@ def process_one(client: ComfyClient, cfg: dict, image_path: Path, src_dir: Path,
         if seed < 0:
             seed = random.randint(0, 2 ** 31 - 1)
 
-        stem = Path(name).stem
         source = ImageOps.exif_transpose(im)
         if source.mode != "RGB":
             source = source.convert("RGB")
 
         # Single pass (plugin scheme). A 2-pass hi-res refine runs inside the
         # graph only when the canvas exceeds the model max context.
-        result = run_outpaint_pass(
+        run_outpaint_pass(
             client, cfg, name, source, final_geo, out_dir, seed,
             out_stem=f"{stem}__{final_geo['TW']}x{final_geo['TH']}")
-        out_path = out_dir / f"{stem}__{final_geo['TW']}x{final_geo['TH']}.png"
         grow, feather, blend = compute_mask_params(
             cfg, final_geo["W"], final_geo["H"],
             final_geo.get("iw"), final_geo.get("ih"))
         initial = compute_pass_resolution(final_geo, cfg)
-        return {"key": key, "status": "ok", "image": name,
+        return {"status": "ok", "image": name,
                 "output": str(out_path),
                 "size": [final_geo["TW"], final_geo["TH"]],
                 "seed": seed, "src_size": [iw, ih],
@@ -915,7 +888,7 @@ def process_one(client: ComfyClient, cfg: dict, image_path: Path, src_dir: Path,
                 "ratio": cfg.get("ASPECT_RATIO", "screen")}
     except Exception as e:
         log(f"ERROR {name}: {e}")
-        return {"key": key, "status": "error", "image": name, "error": str(e)}
+        return {"status": "error", "image": name, "error": str(e)}
 
 
 def main():
@@ -929,8 +902,10 @@ def main():
     ap.add_argument("--seed", type=int, default=None, help="fixed seed")
     ap.add_argument("--limit", type=int, default=0, help="max images to process (0=all)")
     ap.add_argument("--only", help="process only files containing this substring")
-    ap.add_argument("--resume", action="store_true", help="resume (skip done)")
-    ap.add_argument("--no-resume", action="store_true", help="ignore results file")
+    ap.add_argument("--resume", action="store_true",
+                    help="resume: skip images whose outpaint output already exists")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="ignore RESUME and reprocess all images")
     ap.add_argument("--dry-run", action="store_true",
                     help="dump graph JSON instead of submitting")
     ap.add_argument("--check", action="store_true",
@@ -990,7 +965,6 @@ def main():
 
     resume = args.resume or (not args.no_resume and env_bool(str(cfg.get("RESUME", "true"))))
     args.resume = resume  # make env-based RESUME visible to process_one()
-    results = load_results(out_dir) if resume else {}
 
     images = collect_images(src_dir)
     if not images:
@@ -1005,11 +979,7 @@ def main():
     stats = {"ok": 0, "error": 0, "skipped": 0}
     t0 = time.time()
     for img in images:
-        res = process_one(client, cfg, img, src_dir, out_dir, results, args)
-        # --dry-run must NOT touch the results file, otherwise its "dry-run"
-        # entries overwrite previously recorded "ok" status and break resume.
-        if not args.dry_run:
-            append_results(out_dir, {**res, "ts": time.time()})
+        res = process_one(client, cfg, img, src_dir, out_dir, args)
         stats[res.get("status", "skipped")] = stats.get(res.get("status", "skipped"), 0) + 1
 
     log(f"Done in {time.time() - t0:.1f}s. "
